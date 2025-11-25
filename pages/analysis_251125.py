@@ -152,6 +152,101 @@ def plot_tmssr_proportions(pivot_df: pd.DataFrame):
     return fig
 
 
+def compute_tmssr_potential_counts(df: pd.DataFrame):
+    """각 세션별(TMSSR × Potential) 개수를 계산한 피벗 테이블과 세션 레이블 목록을 반환.
+
+    반환값: (pivot_df, labels)
+    - pivot_df: 인덱스는 그대로 유지(날짜, 회차), 컬럼은 (TMSSR, Potential) 형태의 피벗 테이블
+    - labels: 세션 라벨 리스트 (날짜 #회차)
+    """
+    df2 = df.copy()
+    if 'TMSSR' not in df2.columns:
+        df2['TMSSR'] = 'Unknown'
+    df2['TMSSR'] = df2['TMSSR'].fillna('Unknown')
+    # '-' 표시는 분석에서 제외
+    df2 = df2[df2['TMSSR'] != '-']
+    # Potential은 High/Low만 사용
+    df2['Potential'] = df2['Potential'].fillna('-')
+    df2 = df2[df2['Potential'].isin(['High', 'Low'])]
+
+    df2['회차'] = df2['회차'].astype(int)
+    df2['날짜'] = pd.to_datetime(df2['날짜']).dt.date
+
+    grp = df2.groupby(['날짜', '회차', 'TMSSR', 'Potential']).size().reset_index(name='count')
+    pivot = grp.pivot_table(index=['날짜', '회차'], columns=['TMSSR', 'Potential'], values='count', fill_value=0)
+
+    # 세션 라벨 생성 (index 기반)
+    labels = [f"{d} #{r}" for (d, r) in pivot.index.tolist()]
+
+    # 반환: pivot (index 유지)와 labels
+    return pivot, labels
+
+
+def plot_tmssr_potential_trends(pivot_df: pd.DataFrame, labels: list):
+    """각 TMSSR 범주별로 High/Low의 변화(세션 순서)를 막대 그래프로 표시.
+
+    pivot_df: index가 (날짜, 회차)인 피벗 테이블
+    labels: 각 인덱스에 대응하는 x축 레이블 리스트
+    """
+    # TMSSR 카테고리 목록 추출 (멀티컬럼 형태에서 추출)
+    col_tuples = [c for c in pivot_df.columns if isinstance(c, tuple) and len(c) == 2]
+    tmssr_cats = sorted({t[0] for t in col_tuples})
+
+    # 색상 팔레트 (High, Low 쌍)
+    high_palette = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b', '#e377c2']
+    low_palette =  ['#17becf', '#ffbb78', '#98df8a', '#ff9896', '#c5b0d5', '#c49c94', '#f7b6d2']
+
+    fig = go.Figure()
+    for i, cat in enumerate(tmssr_cats):
+        color_h = high_palette[i % len(high_palette)]
+        color_l = low_palette[i % len(low_palette)]
+
+        # High bar
+        col_high = (cat, 'High')
+        if col_high in pivot_df.columns:
+            y_high = pivot_df[col_high].astype(float).fillna(0).tolist()
+        else:
+            y_high = [0] * len(labels)
+        fig.add_trace(go.Bar(
+            x=labels,
+            y=y_high,
+            name=f'{cat} - High',
+            marker=dict(color=color_h),
+            offsetgroup=f'{cat}_high',
+            legendgroup=cat,
+            hovertemplate=f'{cat} - High<br>%{{x}}<br>count: %{{y}}<extra></extra>'
+        ))
+
+        # Low bar
+        col_low = (cat, 'Low')
+        if col_low in pivot_df.columns:
+            y_low = pivot_df[col_low].astype(float).fillna(0).tolist()
+        else:
+            y_low = [0] * len(labels)
+        fig.add_trace(go.Bar(
+            x=labels,
+            y=y_low,
+            name=f'{cat} - Low',
+            marker=dict(color=color_l),
+            offsetgroup=f'{cat}_low',
+            legendgroup=cat,
+            hovertemplate=f'{cat} - Low<br>%{{x}}<br>count: %{{y}}<extra></extra>'
+        ))
+
+    fig.update_layout(
+        title='세션별 TMSSR 범주별 High / Low (막대그래프)',
+        xaxis_title='날짜 #회차',
+        yaxis_title='발화 수',
+        xaxis=dict(tickangle=-45),
+        margin=dict(l=40, r=20, t=70, b=120),
+        template='plotly_white',
+        barmode='group',
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
+    )
+    fig.update_layout(font=dict(family='Noto Sans KR, sans-serif', size=12))
+    return fig
+
+
 def main():
     st.title('Rehearsal: 날짜·회차별 High/Low/Total 발화 수 추이')
 
@@ -204,6 +299,17 @@ def main():
             st.info('TMSSR 데이터를 찾을 수 없습니다.')
     except Exception as e:
         st.warning(f'TMSSR 시각화 생성 중 오류: {e}')
+
+    # TMSSR 범주별 High/Low 변화 (라인 플롯)
+    try:
+        pivot_ph, labels_ph = compute_tmssr_potential_counts(df)
+        if pivot_ph.shape[0] > 0:
+            fig_ph = plot_tmssr_potential_trends(pivot_ph, labels_ph)
+            st.plotly_chart(fig_ph, use_container_width=True)
+        else:
+            st.info('TMSSR × Potential 데이터가 없습니다.')
+    except Exception as e:
+        st.warning(f'TMSSR×Potential 시각화 생성 중 오류: {e}')
 
     # 플롯 표시 완료
     st.info('플롯이 생성되었습니다.')
